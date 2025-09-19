@@ -41,13 +41,13 @@ class PDFProcessor:
     
     def extract_underlined_words(self, pdf_bytes: bytes) -> dict:
         """
-        Extract underlined word counts from page 2, signature analysis from last page, and AED 3500 count.
+        Extract underlined word counts from page 2, signature analysis from last page, AED 3500 count, article count, and names.
         
         Args:
             pdf_bytes: PDF content as bytes
             
         Returns:
-            dict: Dictionary with status, underline counts, AED count, and signature counts
+            dict: Dictionary with status, underline counts, AED count, article count, names, and signature counts
             
         Raises:
             ValueError: If PDF cannot be processed
@@ -67,6 +67,12 @@ class PDFProcessor:
             # Count AED 3500 occurrences throughout the PDF
             aed_count = self._count_aed_occurrences(pdf_document)
             
+            # Count article occurrences throughout the PDF
+            article_count = self._count_article_occurrences(pdf_document)
+            
+            # Extract client and maid names
+            names_data = self._extract_names_after_first_party(pdf_document)
+            
             pdf_document.close()
             
             # Format as requested new structure
@@ -77,6 +83,11 @@ class PDFProcessor:
                 "week": word_counts['week'],
                 "month": word_counts['month'],
                 "aed_3500_count": aed_count,
+                "article_count": article_count,
+                "client_name_string": names_data["client_name_string"],
+                "client_name_exists": names_data["client_name_exists"],
+                "maid_name_string": names_data["maid_name_string"],
+                "maid_name_exists": names_data["maid_name_exists"],
                 "left_stamp": signature_counts['left_elements'],
                 "right_signature": signature_counts['right_elements']
             }
@@ -93,6 +104,11 @@ class PDFProcessor:
                 "week": 0,
                 "month": 0,
                 "aed_3500_count": 0,
+                "article_count": 0,
+                "client_name_string": "",
+                "client_name_exists": False,
+                "maid_name_string": "",
+                "maid_name_exists": False,
                 "left_stamp": 0,
                 "right_signature": 0,
                 "error_message": str(e)
@@ -392,6 +408,109 @@ class PDFProcessor:
         
         logger.info(f"Total '{search_string}' occurrences: {aed_count}")
         return aed_count
+
+    def _count_article_occurrences(self, pdf_document):
+        """Count occurrences of 'article' string throughout the entire PDF"""
+        article_count = 0
+        search_string = "article"
+        
+        logger.info(f"Searching for '{search_string}' throughout the PDF")
+        
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document[page_num]
+            text_dict = page.get_text("dict")
+            
+            for block in text_dict["blocks"]:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            text = span.get("text", "").strip()
+                            # Count occurrences in this text span (case-insensitive)
+                            count_in_span = text.lower().count(search_string.lower())
+                            if count_in_span > 0:
+                                article_count += count_in_span
+                                logger.info(f"Found {count_in_span} occurrence(s) of '{search_string}' on page {page_num + 1}: '{text}'")
+        
+        logger.info(f"Total '{search_string}' occurrences: {article_count}")
+        return article_count
+
+    def _extract_names_after_first_party(self, pdf_document):
+        """Extract client and maid names by finding the first two 'Name:' occurrences after 'First Party'"""
+        
+        # First, get all text from the PDF for debug purposes
+        full_text = ""
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document[page_num]
+            page_text = page.get_text()
+            full_text += f"\n=== PAGE {page_num + 1} ===\n{page_text}\n"
+        
+        logger.info(f"FULL PDF TEXT FOR DEBUG:\n{full_text}")
+        
+        # Now extract names
+        client_name = None
+        maid_name = None
+        
+        # Combine all text into one string for easier parsing
+        combined_text = ""
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document[page_num]
+            combined_text += page.get_text() + " "
+        
+        logger.info(f"Combined text length: {len(combined_text)} characters")
+        
+        # Find "First Party" position
+        first_party_pos = combined_text.find("First Party")
+        if first_party_pos == -1:
+            logger.warning("'First Party' not found in PDF text")
+            return {
+                "client_name_string": "",
+                "client_name_exists": False,
+                "maid_name_string": "",
+                "maid_name_exists": False
+            }
+        
+        logger.info(f"Found 'First Party' at position {first_party_pos}")
+        
+        # Look for "Name:" occurrences after "First Party"
+        text_after_first_party = combined_text[first_party_pos:]
+        name_positions = []
+        start_pos = 0
+        
+        while True:
+            name_pos = text_after_first_party.find("Name:", start_pos)
+            if name_pos == -1:
+                break
+            name_positions.append(first_party_pos + name_pos)
+            start_pos = name_pos + 1
+        
+        logger.info(f"Found {len(name_positions)} 'Name:' occurrences after 'First Party'")
+        
+        # Extract names from the first two "Name:" occurrences
+        for i, name_pos in enumerate(name_positions[:2]):
+            # Find the text after "Name:"
+            name_start = name_pos + 5  # Length of "Name:"
+            # Look for the next line break or significant whitespace to end the name
+            name_end = name_start
+            while name_end < len(combined_text) and combined_text[name_end] not in ['\n', '\r']:
+                name_end += 1
+            
+            name_text = combined_text[name_start:name_end].strip()
+            # Clean up the name (remove extra spaces, common prefixes)
+            name_text = ' '.join(name_text.split())
+            
+            if i == 0:  # First name is client
+                client_name = name_text
+                logger.info(f"Extracted client name: '{client_name}'")
+            elif i == 1:  # Second name is maid
+                maid_name = name_text
+                logger.info(f"Extracted maid name: '{maid_name}'")
+        
+        return {
+            "client_name_string": client_name or "",
+            "client_name_exists": bool(client_name and client_name.strip()),
+            "maid_name_string": maid_name or "",
+            "maid_name_exists": bool(maid_name and maid_name.strip())
+        }
 
     def _extract_underlined_from_drawings(self, pdf_document):
         """Extract underlined words by detecting horizontal lines near text, focusing on target words"""

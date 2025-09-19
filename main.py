@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="PDF Analysis API",
-    description="API to extract underlined words, AED 3500 count, and signature analysis from PDF files",
-    version="2.0.0"
+    description="API to extract underlined words, text counts, name extraction, and signature analysis from PDF files",
+    version="3.0.0"
 )
 
 # Add CORS middleware
@@ -41,6 +41,11 @@ class AnalysisResponse(BaseModel):
     week: int
     month: int
     aed_3500_count: int
+    article_count: int
+    client_name_string: str
+    client_name_exists: bool
+    maid_name_string: str
+    maid_name_exists: bool
     left_stamp: int
     right_signature: int
     error_message: Optional[str] = None
@@ -49,11 +54,13 @@ class AnalysisResponse(BaseModel):
 async def info():
     return {
         "message": "PDF Analysis API",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "docs": "/docs",
         "features": [
             "Underlined word counting (hour, day, week, month) on page 2",
             "AED 3500 occurrence counting throughout PDF",
+            "Article word occurrence counting throughout PDF",
+            "Client and maid name extraction after 'First Party'",
             "Signature box content analysis on last page"
         ]
     }
