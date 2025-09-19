@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
-from typing import List
+from typing import List, Optional
 import logging
 from pdf_processor import process_pdf_base64
 
@@ -10,9 +10,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="PDF Underline Extractor API",
-    description="API to extract underlined words from PDF files",
-    version="1.0.0"
+    title="PDF Analysis API",
+    description="API to extract underlined words, AED 3500 count, and signature analysis from PDF files",
+    version="2.0.0"
 )
 
 # Add CORS middleware
@@ -34,50 +34,57 @@ class PDFRequest(BaseModel):
             raise ValueError('PDF base64 content cannot be empty')
         return v.strip()
 
-class UnderlineResponse(BaseModel):
-    underlined_words: List[str]
-    total_count: int
-    message: str
+class AnalysisResponse(BaseModel):
+    status: str
+    hour: int
+    day: int
+    week: int
+    month: int
+    aed_3500_count: int
+    left_stamp: int
+    right_signature: int
+    error_message: Optional[str] = None
 
-@app.get("/")
-async def root():
+@app.get("/info")
+async def info():
     return {
-        "message": "PDF Underline Extractor API",
-        "version": "1.0.0",
-        "docs": "/docs"
+        "message": "PDF Analysis API",
+        "version": "2.0.0",
+        "docs": "/docs",
+        "features": [
+            "Underlined word counting (hour, day, week, month) on page 2",
+            "AED 3500 occurrence counting throughout PDF",
+            "Signature box content analysis on last page"
+        ]
     }
 
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
 
-@app.post("/extract-underlines", response_model=UnderlineResponse)
-async def extract_underlines(request: PDFRequest):
+@app.post("/", response_model=AnalysisResponse)
+async def analyze_pdf(request: PDFRequest):
     """
-    Extract underlined words from a PDF file provided as base64 string.
+    Extract underlined words, AED 3500 count, and signature analysis from a PDF file.
     
     Args:
         request: PDFRequest containing base64 encoded PDF
         
     Returns:
-        UnderlineResponse: Contains list of underlined words and metadata
+        AnalysisResponse: Contains all analysis results including status
         
     Raises:
         HTTPException: If PDF processing fails
     """
     try:
-        logger.info("Processing PDF for underlined words extraction")
+        logger.info("Processing PDF for complete analysis")
         
-        # Process the PDF and extract underlined words
-        underlined_words = process_pdf_base64(request.pdf_base64)
+        # Process the PDF and extract all analysis data
+        result = process_pdf_base64(request.pdf_base64)
         
-        logger.info(f"Successfully extracted {len(underlined_words)} underlined words")
+        logger.info(f"Successfully completed analysis with status: {result['status']}")
         
-        return UnderlineResponse(
-            underlined_words=underlined_words,
-            total_count=len(underlined_words),
-            message="Successfully extracted underlined words"
-        )
+        return AnalysisResponse(**result)
         
     except ValueError as e:
         logger.error(f"Validation error: {str(e)}")

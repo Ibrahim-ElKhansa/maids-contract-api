@@ -39,15 +39,15 @@ class PDFProcessor:
             logger.error(f"Error decoding base64 PDF: {str(e)}")
             raise ValueError(f"Invalid base64 PDF data: {str(e)}")
     
-    def extract_underlined_words(self, pdf_bytes: bytes) -> List[str]:
+    def extract_underlined_words(self, pdf_bytes: bytes) -> dict:
         """
-        Extract underlined word counts from page 2 only, focusing on hour/day/week/month.
+        Extract underlined word counts from page 2, signature analysis from last page, and AED 3500 count.
         
         Args:
             pdf_bytes: PDF content as bytes
             
         Returns:
-            List[str]: List with counts in format ["hour:X", "day:X", "week:X", "month:X"]
+            dict: Dictionary with status, underline counts, AED count, and signature counts
             
         Raises:
             ValueError: If PDF cannot be processed
@@ -61,22 +61,42 @@ class PDFProcessor:
             # Get underlined word counts from page 2 only
             word_counts = self._get_page2_underlined_counts(pdf_document)
             
+            # Get signature analysis from last page
+            signature_counts = self._analyze_last_page_signatures(pdf_document)
+            
+            # Count AED 3500 occurrences throughout the PDF
+            aed_count = self._count_aed_occurrences(pdf_document)
+            
             pdf_document.close()
             
-            # Format as requested: ["hour:X", "day:X", "week:X", "month:X"]
-            result = [
-                f"hour:{word_counts['hour']}",
-                f"day:{word_counts['day']}",
-                f"week:{word_counts['week']}",
-                f"month:{word_counts['month']}"
-            ]
+            # Format as requested new structure
+            result = {
+                "status": "success",
+                "hour": word_counts['hour'],
+                "day": word_counts['day'],
+                "week": word_counts['week'],
+                "month": word_counts['month'],
+                "aed_3500_count": aed_count,
+                "left_stamp": signature_counts['left_elements'],
+                "right_signature": signature_counts['right_elements']
+            }
             
-            logger.info(f"Page 2 underlined word counts: {result}")
+            logger.info(f"Analysis results: {result}")
             return result
             
         except Exception as e:
             logger.error(f"Error processing PDF: {str(e)}")
-            raise ValueError(f"Error processing PDF: {str(e)}")
+            return {
+                "status": "error",
+                "hour": 0,
+                "day": 0,
+                "week": 0,
+                "month": 0,
+                "aed_3500_count": 0,
+                "left_stamp": 0,
+                "right_signature": 0,
+                "error_message": str(e)
+            }
     
     def _get_page2_underlined_counts(self, pdf_document):
         """Get underlined word counts for hour/day/week/month from page 2 only"""
@@ -177,6 +197,201 @@ class PDFProcessor:
         
         logger.info(f"Page 2 underlined counts: {word_counts}")
         return word_counts
+
+    def _analyze_last_page_signatures(self, pdf_document):
+        """Analyze signature boxes on the last page for ANY content (drawings, images, text)
+        
+        Determines signature box layout by searching for company strings on the LAST PAGE:
+        - If "Maids CC Domestic Workers" found: Uses high boxes (Y: 425-537)
+        - If "Al Mustaqeem Domestic Workers" found: Uses low boxes (Y: 508-608)
+        
+        Then counts ANY content found inside the determined signature boxes.
+        """
+        signature_counts = {
+            'left_elements': 0,
+            'right_elements': 0
+        }
+        
+        # Return zeros if there are no pages
+        if pdf_document.page_count == 0:
+            logger.info("PDF has no pages, returning zero signature counts")
+            return signature_counts
+        
+        # Process last page
+        last_page_num = pdf_document.page_count - 1
+        last_page = pdf_document[last_page_num]
+        logger.info(f"Analyzing signatures on last page (page {last_page_num + 1})")
+        
+        # Search the last page for company strings to determine layout
+        signature_layout = None  # Will be "high" or "low"
+        
+        logger.info("Searching last page for company identification strings...")
+        
+        text_dict = last_page.get_text("dict")
+        
+        for block in text_dict["blocks"]:
+            if "lines" in block:
+                for line in block["lines"]:
+                    for span in line["spans"]:
+                        text = span.get("text", "").strip()
+                        
+                        # Check for Maids CC company string
+                        if "Maids CC Domestic Workers" in text:
+                            signature_layout = "high"
+                            logger.info(f"Found 'Maids CC Domestic Workers' on last page - Using HIGH layout")
+                            break
+                        
+                        # Check for Al Mustaqeem company string  
+                        elif "Al Mustaqeem Domestic Workers" in text:
+                            signature_layout = "low"
+                            logger.info(f"Found 'Al Mustaqeem Domestic Workers' on last page - Using LOW layout")
+                            break
+                    
+                    if signature_layout:
+                        break
+                if signature_layout:
+                    break
+        
+        # Default to high layout if no company string found
+        if not signature_layout:
+            signature_layout = "high"
+            logger.warning("No company identification string found on last page, defaulting to HIGH layout")
+        
+        # Define signature content areas based on detected company type
+        if signature_layout == "high":
+            # Maids CC layout coordinates (high boxes)
+            left_content_area = (95, 425, 290, 537)   # Left signature box
+            right_content_area = (300, 425, 500, 537)  # Right signature box
+            logger.info("Using MAIDS CC layout coordinates: Left(95,425,290,537) Right(300,425,500,537)")
+        else:  # low layout
+            # Al Mustaqeem layout coordinates (low boxes)
+            left_content_area = (95, 508, 290, 608)   # Left signature box
+            right_content_area = (300, 508, 500, 608)  # Right signature box
+            logger.info("Using AL MUSTAQEEM layout coordinates: Left(95,508,290,608) Right(300,508,500,608)")
+        
+        # Count different types of content
+        left_count = 0
+        right_count = 0
+        
+        # 1. Count drawings (any drawing content inside the boxes)
+        drawings = last_page.get_drawings()
+        logger.info(f"Found {len(drawings)} drawings on last page")
+        
+        for drawing in drawings:
+            # Get drawing center point or any point within the drawing
+            center_x, center_y = None, None
+            
+            if 'rect' in drawing and drawing['rect']:
+                rect = drawing['rect']
+                center_x = (rect.x0 + rect.x1) / 2
+                center_y = (rect.y0 + rect.y1) / 2
+            elif drawing['type'] == 's' and drawing['items']:
+                # For line drawings, use the first point
+                item = drawing['items'][0]
+                if item[0] == 'l':  # line
+                    center_x = item[1][0]  # start point x
+                    center_y = item[1][1]  # start point y
+            
+            if center_x is not None and center_y is not None:
+                # Check if drawing point is inside signature areas (inclusive boundaries)
+                in_left = (left_content_area[0] <= center_x <= left_content_area[2] and
+                          left_content_area[1] <= center_y <= left_content_area[3])
+                in_right = (right_content_area[0] <= center_x <= right_content_area[2] and
+                           right_content_area[1] <= center_y <= right_content_area[3])
+                
+                if in_left:
+                    left_count += 1
+                    logger.info(f"Drawing in left signature area: type={drawing['type']}, center=({center_x:.1f}, {center_y:.1f})")
+                elif in_right:
+                    right_count += 1
+                    logger.info(f"Drawing in right signature area: type={drawing['type']}, center=({center_x:.1f}, {center_y:.1f})")
+        
+        # 2. Count images
+        image_list = last_page.get_images()
+        logger.info(f"Found {len(image_list)} images on last page")
+        
+        for img_index, img in enumerate(image_list):
+            try:
+                img_rect = last_page.get_image_bbox(img[7])  # img[7] is the image xref
+                center_x = (img_rect.x0 + img_rect.x1) / 2
+                center_y = (img_rect.y0 + img_rect.y1) / 2
+                
+                # Check if image is in signature areas
+                in_left = (left_content_area[0] <= center_x <= left_content_area[2] and
+                          left_content_area[1] <= center_y <= left_content_area[3])
+                in_right = (right_content_area[0] <= center_x <= right_content_area[2] and
+                           right_content_area[1] <= center_y <= right_content_area[3])
+                
+                if in_left:
+                    left_count += 1
+                    logger.info(f"Image in left signature area: center=({center_x:.1f}, {center_y:.1f}), size={img_rect.width:.1f}x{img_rect.height:.1f}")
+                elif in_right:
+                    right_count += 1
+                    logger.info(f"Image in right signature area: center=({center_x:.1f}, {center_y:.1f}), size={img_rect.width:.1f}x{img_rect.height:.1f}")
+            except Exception as e:
+                logger.warning(f"Error analyzing image {img_index}: {e}")
+        
+        # 3. Count all text content inside signature boxes (excluding layout detection labels)
+        for block in text_dict["blocks"]:
+            if "bbox" in block:
+                bbox = block["bbox"]
+                center_x = (bbox[0] + bbox[2]) / 2
+                center_y = (bbox[1] + bbox[3]) / 2
+                
+                # Check if text is inside signature areas (inclusive boundaries)
+                in_left = (left_content_area[0] <= center_x <= left_content_area[2] and
+                          left_content_area[1] <= center_y <= left_content_area[3])
+                in_right = (right_content_area[0] <= center_x <= right_content_area[2] and
+                           right_content_area[1] <= center_y <= right_content_area[3])
+                
+                if in_left or in_right:
+                    # Get text content
+                    text_content = ""
+                    if "lines" in block:
+                        for line in block["lines"]:
+                            for span in line["spans"]:
+                                text_content += span["text"]
+                    
+                    # Count ALL text content inside the boxes
+                    if text_content.strip():
+                        area = "left" if in_left else "right"
+                        if in_left:
+                            left_count += 1
+                        else:
+                            right_count += 1
+                        logger.info(f"Text in {area} signature area: '{text_content.strip()}'")
+        
+        signature_counts['left_elements'] = left_count
+        signature_counts['right_elements'] = right_count
+        
+        logger.info(f"Final signature analysis: left={left_count}, right={right_count}")
+        
+        return signature_counts
+
+    def _count_aed_occurrences(self, pdf_document):
+        """Count occurrences of 'AED 3500' string throughout the entire PDF"""
+        aed_count = 0
+        search_string = "AED 3500"
+        
+        logger.info(f"Searching for '{search_string}' throughout the PDF")
+        
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document[page_num]
+            text_dict = page.get_text("dict")
+            
+            for block in text_dict["blocks"]:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            text = span.get("text", "").strip()
+                            # Count occurrences in this text span
+                            count_in_span = text.count(search_string)
+                            if count_in_span > 0:
+                                aed_count += count_in_span
+                                logger.info(f"Found {count_in_span} occurrence(s) of '{search_string}' on page {page_num + 1}: '{text}'")
+        
+        logger.info(f"Total '{search_string}' occurrences: {aed_count}")
+        return aed_count
 
     def _extract_underlined_from_drawings(self, pdf_document):
         """Extract underlined words by detecting horizontal lines near text, focusing on target words"""
@@ -507,19 +722,19 @@ class PDFProcessor:
 # Create a global instance
 pdf_processor = PDFProcessor()
 
-def process_pdf_base64(base64_string: str) -> List[str]:
+def process_pdf_base64(base64_string: str) -> dict:
     """
-    Main function to process base64 PDF and extract underlined words.
+    Main function to process base64 PDF and extract all analysis data.
     
     Args:
         base64_string: Base64 encoded PDF content
         
     Returns:
-        List[str]: List of underlined words
+        dict: Dictionary with status and all analysis results
         
     Raises:
         ValueError: If processing fails
     """
     pdf_bytes = pdf_processor.decode_base64_pdf(base64_string)
-    underlined_words = pdf_processor.extract_underlined_words(pdf_bytes)
-    return underlined_words
+    result = pdf_processor.extract_underlined_words(pdf_bytes)
+    return result

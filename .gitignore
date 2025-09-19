@@ -56,3 +56,4 @@ sample*.pdf
 # Environment variables
 .env
 .env.local
+.vercel
