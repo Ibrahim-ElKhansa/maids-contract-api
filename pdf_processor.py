@@ -41,13 +41,14 @@ class PDFProcessor:
     
     def extract_underlined_words(self, pdf_bytes: bytes) -> dict:
         """
-        Extract underlined word counts from page 2, signature analysis from last page, AED 3500 count, article count, and names.
+        Extract underlined word counts from page 2, signature analysis from last page, AED 3500 count, article count, Arabic text 'ﺍﻟﻤﻮﺿﻮﻉ' count, and names.
         
         Args:
             pdf_bytes: PDF content as bytes
             
         Returns:
-            dict: Dictionary with status, underline counts, AED count, article count, names, and signature counts
+            dict: Dictionary with status, underline counts, AED count, article count, Arabic text count, names, signature counts, 
+                  signature layout, and detailed element information for signature areas
             
         Raises:
             ValueError: If PDF cannot be processed
@@ -62,13 +63,16 @@ class PDFProcessor:
             word_counts = self._get_page2_underlined_counts(pdf_document)
             
             # Get signature analysis from last page
-            signature_counts = self._analyze_last_page_signatures(pdf_document)
+            signature_analysis = self._analyze_last_page_signatures(pdf_document)
             
             # Count AED 3500 occurrences throughout the PDF
             aed_count = self._count_aed_occurrences(pdf_document)
             
             # Count article occurrences throughout the PDF
             article_count = self._count_article_occurrences(pdf_document)
+            
+            # Count Arabic contract text occurrences throughout the PDF
+            arabic_contract_count = self._count_arabic_contract_occurrences(pdf_document)
             
             # Extract client and maid names
             names_data = self._extract_names_after_first_party(pdf_document)
@@ -84,12 +88,16 @@ class PDFProcessor:
                 "month": word_counts['month'],
                 "aed_3500_count": aed_count,
                 "article_count": article_count,
+                "arabic_contract_count": arabic_contract_count,
                 "client_name_string": names_data["client_name_string"],
                 "client_name_exists": names_data["client_name_exists"],
                 "maid_name_string": names_data["maid_name_string"],
                 "maid_name_exists": names_data["maid_name_exists"],
-                "left_stamp": signature_counts['left_elements'],
-                "right_signature": signature_counts['right_elements']
+                "left_stamp": signature_analysis['left_elements'],
+                "right_signature": signature_analysis['right_elements'],
+                "signature_layout": signature_analysis['layout'],
+                "left_element_details": signature_analysis['left_element_details'],
+                "right_element_details": signature_analysis['right_element_details']
             }
             
             logger.info(f"Analysis results: {result}")
@@ -105,12 +113,16 @@ class PDFProcessor:
                 "month": 0,
                 "aed_3500_count": 0,
                 "article_count": 0,
+                "arabic_contract_count": 0,
                 "client_name_string": "",
                 "client_name_exists": False,
                 "maid_name_string": "",
                 "maid_name_exists": False,
                 "left_stamp": 0,
                 "right_signature": 0,
+                "signature_layout": "unknown",
+                "left_element_details": [],
+                "right_element_details": [],
                 "error_message": str(e)
             }
     
@@ -223,15 +235,18 @@ class PDFProcessor:
         
         Then counts ANY content found inside the determined signature boxes.
         """
-        signature_counts = {
+        signature_analysis = {
             'left_elements': 0,
-            'right_elements': 0
+            'right_elements': 0,
+            'layout': 'unknown',
+            'left_element_details': [],
+            'right_element_details': []
         }
         
         # Return zeros if there are no pages
         if pdf_document.page_count == 0:
             logger.info("PDF has no pages, returning zero signature counts")
-            return signature_counts
+            return signature_analysis
         
         # Process last page
         last_page_num = pdf_document.page_count - 1
@@ -254,12 +269,14 @@ class PDFProcessor:
                         # Check for Maids CC company string
                         if "Maids CC Domestic Workers" in text:
                             signature_layout = "high"
+                            signature_analysis['layout'] = "high"
                             logger.info(f"Found 'Maids CC Domestic Workers' on last page - Using HIGH layout")
                             break
                         
                         # Check for Al Mustaqeem company string  
                         elif "Al Mustaqeem Domestic Workers" in text:
                             signature_layout = "low"
+                            signature_analysis['layout'] = "low"
                             logger.info(f"Found 'Al Mustaqeem Domestic Workers' on last page - Using LOW layout")
                             break
                     
@@ -271,6 +288,7 @@ class PDFProcessor:
         # Default to high layout if no company string found
         if not signature_layout:
             signature_layout = "high"
+            signature_analysis['layout'] = "high"
             logger.warning("No company identification string found on last page, defaulting to HIGH layout")
         
         # Define signature content areas based on detected company type
@@ -317,9 +335,23 @@ class PDFProcessor:
                 
                 if in_left:
                     left_count += 1
+                    left_element_detail = {
+                        'type': 'drawing',
+                        'drawing_type': drawing['type'],
+                        'center': {'x': round(center_x, 1), 'y': round(center_y, 1)},
+                        'description': f"Drawing type '{drawing['type']}'"
+                    }
+                    signature_analysis['left_element_details'].append(left_element_detail)
                     logger.info(f"Drawing in left signature area: type={drawing['type']}, center=({center_x:.1f}, {center_y:.1f})")
                 elif in_right:
                     right_count += 1
+                    right_element_detail = {
+                        'type': 'drawing',
+                        'drawing_type': drawing['type'],
+                        'center': {'x': round(center_x, 1), 'y': round(center_y, 1)},
+                        'description': f"Drawing type '{drawing['type']}'"
+                    }
+                    signature_analysis['right_element_details'].append(right_element_detail)
                     logger.info(f"Drawing in right signature area: type={drawing['type']}, center=({center_x:.1f}, {center_y:.1f})")
         
         # 2. Count images
@@ -340,9 +372,23 @@ class PDFProcessor:
                 
                 if in_left:
                     left_count += 1
+                    left_element_detail = {
+                        'type': 'image',
+                        'center': {'x': round(center_x, 1), 'y': round(center_y, 1)},
+                        'size': {'width': round(img_rect.width, 1), 'height': round(img_rect.height, 1)},
+                        'description': f"Image {img_rect.width:.1f}x{img_rect.height:.1f}"
+                    }
+                    signature_analysis['left_element_details'].append(left_element_detail)
                     logger.info(f"Image in left signature area: center=({center_x:.1f}, {center_y:.1f}), size={img_rect.width:.1f}x{img_rect.height:.1f}")
                 elif in_right:
                     right_count += 1
+                    right_element_detail = {
+                        'type': 'image',
+                        'center': {'x': round(center_x, 1), 'y': round(center_y, 1)},
+                        'size': {'width': round(img_rect.width, 1), 'height': round(img_rect.height, 1)},
+                        'description': f"Image {img_rect.width:.1f}x{img_rect.height:.1f}"
+                    }
+                    signature_analysis['right_element_details'].append(right_element_detail)
                     logger.info(f"Image in right signature area: center=({center_x:.1f}, {center_y:.1f}), size={img_rect.width:.1f}x{img_rect.height:.1f}")
             except Exception as e:
                 logger.warning(f"Error analyzing image {img_index}: {e}")
@@ -371,18 +417,27 @@ class PDFProcessor:
                     # Count ALL text content inside the boxes
                     if text_content.strip():
                         area = "left" if in_left else "right"
+                        element_detail = {
+                            'type': 'text',
+                            'center': {'x': round(center_x, 1), 'y': round(center_y, 1)},
+                            'text': text_content.strip(),
+                            'description': f"Text: '{text_content.strip()}'"
+                        }
+                        
                         if in_left:
                             left_count += 1
+                            signature_analysis['left_element_details'].append(element_detail)
                         else:
                             right_count += 1
+                            signature_analysis['right_element_details'].append(element_detail)
                         logger.info(f"Text in {area} signature area: '{text_content.strip()}'")
         
-        signature_counts['left_elements'] = left_count
-        signature_counts['right_elements'] = right_count
+        signature_analysis['left_elements'] = left_count
+        signature_analysis['right_elements'] = right_count
         
-        logger.info(f"Final signature analysis: left={left_count}, right={right_count}")
+        logger.info(f"Final signature analysis: left={left_count}, right={right_count}, layout={signature_analysis['layout']}")
         
-        return signature_counts
+        return signature_analysis
 
     def _count_aed_occurrences(self, pdf_document):
         """Count occurrences of 'AED 3500' string throughout the entire PDF"""
@@ -433,6 +488,53 @@ class PDFProcessor:
         
         logger.info(f"Total '{search_string}' occurrences: {article_count}")
         return article_count
+
+    def _count_arabic_contract_occurrences(self, pdf_document):
+        """Count occurrences of Arabic text 'ﺍﻟﻤﻮﺿﻮﻉ' throughout the entire PDF"""
+        arabic_contract_count = 0
+        search_string = "ﺍﻟﻤﻮﺿﻮﻉ"
+        
+        logger.info(f"Searching for Arabic text '{search_string}' throughout the PDF")
+        logger.info(f"Search string length: {len(search_string)}")
+        logger.info(f"Search string bytes: {search_string.encode('utf-8')}")
+        
+        # Also try normalized versions and presentation forms
+        search_variations = [
+            "ﺍﻟﻤﻮﺿﻮﻉ",  # Original presentation form (found 2 times)
+            "ﻤﻮﺿﻮﻉ",   # Without article (found 3 times)
+            "الموضوع",      # Standard Arabic
+            "موضوع",       # Standard without article
+            "الموضوع",      # Alternative encoding
+        ]
+        
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document[page_num]
+            text_dict = page.get_text("dict")
+            
+            # Log all text on the page for debugging
+            page_text = page.get_text()
+            logger.info(f"=== PAGE {page_num + 1} TEXT SAMPLE ===")
+            logger.info(f"First 500 chars: {page_text[:500]}")
+            
+            for block in text_dict["blocks"]:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            text = span.get("text", "").strip()
+                            if text:
+                                # Try all search variations
+                                for search_var in search_variations:
+                                    count_in_span = text.count(search_var)
+                                    if count_in_span > 0:
+                                        arabic_contract_count += count_in_span
+                                        logger.info(f"Found {count_in_span} occurrence(s) of '{search_var}' on page {page_num + 1}: '{text}'")
+                                
+                                # Also check if any Arabic text exists at all
+                                if any(ord(char) > 1536 for char in text):  # Arabic Unicode range starts at 1536
+                                    logger.info(f"Arabic text found on page {page_num + 1}: '{text}' (length: {len(text)})")
+        
+        logger.info(f"Total Arabic text occurrences: {arabic_contract_count}")
+        return arabic_contract_count
 
     def _extract_names_after_first_party(self, pdf_document):
         """Extract client and maid names by finding the first two 'Name:' occurrences after 'First Party'"""

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import logging
 from pdf_processor import process_pdf_base64
 
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="PDF Analysis API",
     description="API to extract underlined words, text counts, name extraction, and signature analysis from PDF files",
-    version="3.0.0"
+    version="3.2.4"
 )
 
 # Add CORS middleware
@@ -42,26 +42,33 @@ class AnalysisResponse(BaseModel):
     month: int
     aed_3500_count: int
     article_count: int
+    arabic_contract_count: int
     client_name_string: str
     client_name_exists: bool
     maid_name_string: str
     maid_name_exists: bool
     left_stamp: int
     right_signature: int
+    signature_layout: str
+    left_element_details: List[Dict[str, Any]]
+    right_element_details: List[Dict[str, Any]]
     error_message: Optional[str] = None
 
 @app.get("/info")
 async def info():
     return {
         "message": "PDF Analysis API",
-        "version": "3.0.0",
+        "version": "3.2.4",
         "docs": "/docs",
         "features": [
             "Underlined word counting (hour, day, week, month) on page 2",
             "AED 3500 occurrence counting throughout PDF",
             "Article word occurrence counting throughout PDF",
+            "Arabic text 'الموضوع' occurrence counting throughout PDF (multiple encodings)",
             "Client and maid name extraction after 'First Party'",
-            "Signature box content analysis on last page"
+            "Signature box content analysis on last page",
+            "Signature layout detection (high/low)",
+            "Detailed element information for signature areas"
         ]
     }
 
