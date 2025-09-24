@@ -77,6 +77,9 @@ class PDFProcessor:
             # Extract client and maid names
             names_data = self._extract_names_after_first_party(pdf_document)
             
+            # Detect contract amount (any AED amount that appears twice)
+            contract_amount = self._detect_contract_amount(pdf_document)
+            
             pdf_document.close()
             
             # Format as requested new structure
@@ -93,6 +96,7 @@ class PDFProcessor:
                 "client_name_exists": names_data["client_name_exists"],
                 "maid_name_string": names_data["maid_name_string"],
                 "maid_name_exists": names_data["maid_name_exists"],
+                "contract_amount": contract_amount,
                 "left_stamp": signature_analysis['left_elements'],
                 "right_signature": signature_analysis['right_elements'],
                 "signature_layout": signature_analysis['layout'],
@@ -118,6 +122,7 @@ class PDFProcessor:
                 "client_name_exists": False,
                 "maid_name_string": "",
                 "maid_name_exists": False,
+                "contract_amount": "",
                 "left_stamp": 0,
                 "right_signature": 0,
                 "signature_layout": "unknown",
@@ -535,6 +540,56 @@ class PDFProcessor:
         
         logger.info(f"Total Arabic text occurrences: {arabic_contract_count}")
         return arabic_contract_count
+
+    def _detect_contract_amount(self, pdf_document):
+        """
+        Detect any AED amount that appears exactly twice in the document (contract amount).
+        
+        Returns:
+            str: The AED amount if found twice, empty string otherwise
+        """
+        aed_amounts = {}  # Dictionary to count occurrences of each AED amount
+        
+        # Regex pattern to match AED amounts (e.g., "AED 3500", "AED 2,500", "AED 1,200.50")
+        aed_pattern = r'AED\s+([0-9,]+(?:\.[0-9]{2})?)'
+        
+        logger.info("Searching for AED amounts throughout the PDF to find contract amount")
+        
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document[page_num]
+            text_dict = page.get_text("dict")
+            
+            for block in text_dict["blocks"]:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            text = span.get("text", "").strip()
+                            
+                            # Find all AED amounts in this text span
+                            matches = re.findall(aed_pattern, text, re.IGNORECASE)
+                            
+                            for amount in matches:
+                                # Clean up the amount (remove commas for consistent comparison)
+                                clean_amount = amount.replace(',', '')
+                                aed_string = f"AED {amount}"  # Keep original formatting for output
+                                
+                                if aed_string not in aed_amounts:
+                                    aed_amounts[aed_string] = 0
+                                aed_amounts[aed_string] += 1
+                                
+                                logger.info(f"Found AED amount on page {page_num + 1}: '{aed_string}' in text: '{text}'")
+        
+        # Find amounts that appear exactly twice
+        contract_amounts = [amount for amount, count in aed_amounts.items() if count == 2]
+        
+        if contract_amounts:
+            # If multiple amounts appear twice, take the first one (or we could take the highest)
+            contract_amount = contract_amounts[0]
+            logger.info(f"Contract amount detected: {contract_amount} (appears exactly twice)")
+            return contract_amount
+        else:
+            logger.info("No AED amount found that appears exactly twice")
+            return ""
 
     def _extract_names_after_first_party(self, pdf_document):
         """Extract client and maid names by finding the first two 'Name:' occurrences after 'First Party'"""
