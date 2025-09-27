@@ -47,7 +47,8 @@ class AnalysisResponse(BaseModel):
     client_name_exists: bool
     maid_name_string: str
     maid_name_exists: bool
-    contract_amount: str
+    contract_amount: float  # Changed from str to float to handle both int and decimal amounts
+    has_contract_amount: bool  # New field to indicate if contract amount was found
     left_stamp: int
     right_signature: int
     signature_layout: str
@@ -64,7 +65,7 @@ async def info():
         "features": [
             "Underlined word counting (hour, day, week, month) on page 2",
             "AED 3500 occurrence counting throughout PDF",
-            "Contract amount detection (any AED amount that appears twice)",
+            "Contract amount detection (numeric value, any AED amount that appears twice)",
             "Article word occurrence counting throughout PDF",
             "Arabic text 'الموضوع' occurrence counting throughout PDF (multiple encodings)",
             "Client and maid name extraction after 'First Party'",
